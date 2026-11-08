@@ -195,3 +195,15 @@ nav:
       - 21. Matrix multiplication (FP32): leetgpu/21-matrix-multiplication.md
       - 22. Sparse matrix-vector multiply: leetgpu/22-spmv.md
       - 23. Batched matmul (FP32): leetgpu/23-batched-matmul.md
+  - Courses:
+      - C++ for GPU programmers:
+          - Overview: cpp/index.md
+          - 1. Basics: cpp/01-basics.md
+          - 2. Functions and templates: cpp/02-functions.md
+          - 3. Iterators and algorithms: cpp/03-iterators.md
+          - 4. Memory: cpp/04-memory.md
+          - 5. Objects: cpp/05-objects.md
+          - 6. Polymorphism and generic code: cpp/06-polymorphism.md
+          - 7. Parallel C++ on the CPU: cpp/07-parallel.md
+          - 8. Special topics: cpp/08-special.md
+          - 9. The same C++ inside CUDA: cpp/09-cpp-in-cuda.md

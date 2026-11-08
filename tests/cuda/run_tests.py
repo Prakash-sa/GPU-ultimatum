@@ -529,8 +529,26 @@ def warp(lib):
         check(f"grid.sync normalize n={n}", y, x / x.double().sum(), 1e-6, 1e-4)
 
 
+def cpp_in_cuda(lib):
+    """cpp/src/09_cpp_in_cuda.cu: RAII device memory, views, functor and lambda kernels."""
+    sf = fn(lib, "saxpy_functor", P, P, I, F)
+    sl = fn(lib, "saxpy_lambda", P, P, I, F)
+    sr = getattr(lib, "sum_raii")
+    sr.argtypes, sr.restype = [P, I], ctypes.c_double
+    for n in [1, 255, 1000, 300_001]:
+        x, y0 = torch.randn(n), torch.randn(n)
+        for name, f in [("functor", sf), ("lambda", sl)]:
+            y = y0.clone()
+            f(ptr(x), ptr(y), n, 2.5)
+            check(f"saxpy {name} n={n}", y, 2.5 * x + y0, 1e-6, 1e-6)
+        xh = x.cpu() if GPU else x
+        got = torch.tensor([sr(ptr(xh), n)], dtype=torch.float64)
+        check(f"RAII sum n={n}", got, xh.double().sum().reshape(1), 1e-9, 1e-9)
+
+
 TESTS = {f"{n:02d}": globals()[f"t{n:02d}"] for n in range(1, 24)}
-EXTRA = {"stencil_ops": stencil, "warp_primitives": warp}
+EXTRA = {"docs/notes/stencil_ops.cu": stencil, "docs/notes/warp_primitives.cu": warp,
+         "docs/cpp/src/09_cpp_in_cuda.cu": cpp_in_cuda}
 
 
 def main():
@@ -539,12 +557,12 @@ def main():
         torch.set_default_device("cuda")                 # every test tensor lives on the GPU
     args = [a for a in sys.argv[1:] if a != "--gpu"]
     pattern = args[0] if args else ""
-    files = sorted((ROOT / "docs" / "leetgpu").glob("[0-9][0-9]_*.cu")) + [ROOT / "docs" / "notes" / f"{k}.cu" for k in EXTRA]
+    files = sorted((ROOT / "docs" / "leetgpu").glob("[0-9][0-9]_*.cu")) + [ROOT / k for k in EXTRA]
     for cu in files:
         if pattern not in cu.name:
             continue
         print(cu.relative_to(ROOT))
-        test = EXTRA.get(cu.stem) or TESTS[cu.name[:2]]
+        test = EXTRA.get(str(cu.relative_to(ROOT))) or TESTS[cu.name[:2]]
         test(build(cu))
     print(f"\n{len(FAILED)} failed" + (": " + ", ".join(FAILED) if FAILED else ""))
     sys.exit(1 if FAILED else 0)
