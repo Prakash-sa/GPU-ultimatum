@@ -1,5 +1,7 @@
 # Cheat sheet
 
+API and hardware lookup. For *what to fix* see the [Optimization cheat sheet](optimization-cheatsheet.md); for *how to measure* see the [Profiling cheat sheet](profiling-cheatsheet.md).
+
 ## Indexing
 
 ```cpp

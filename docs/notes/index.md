@@ -19,6 +19,8 @@ is short, with the mental model first and then the practical rules.
 | 12 | [Gradient, divergence and stencils](12-stencils-and-discretization.md) | How do PDE operators become stencils on 2-D/3-D grids, and how do I make them run at bandwidth? |
 | 13 | [Warp primitives and cooperative groups](13-warp-primitives.md) | Shuffles, votes, match, warp reduce, barriers and fences, cooperative groups and grid sync: how threads share data without memory |
 | — | [Cheat sheet](cheatsheet.md) | Quick lookup |
+| — | [Optimization cheat sheet](optimization-cheatsheet.md) | Which bound am I, and what do I fix next? |
+| — | [Profiling cheat sheet](profiling-cheatsheet.md) | Which tool, which command, which metric, what is healthy? |
 
 ### Foundations: why GPUs are built this way
 
