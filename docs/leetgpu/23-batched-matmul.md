@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Question** | *[Batched Matrix Multiplication](https://leetgpu.com/challenges/batched-matrix-multiplication)* (medium) on LeetGPU · [official spec and reference](https://github.com/AlphaGPU/leetgpu-challenges/tree/main/challenges/medium/30_batched_matrix_multiplication) |
-| **Solution** | [23_batched_matmul.py](https://github.com/Prakash-sa/GPU-Codes/blob/main/docs/leetgpu/23_batched_matmul.py) (Triton) · [23_batched_matmul.cu](https://github.com/Prakash-sa/GPU-Codes/blob/main/docs/leetgpu/23_batched_matmul.cu) (CUDA C++) |
+| **Solution** | [23_batched_matmul.py](https://github.com/Prakash-sa/GPU-ultimatum/blob/main/docs/leetgpu/23_batched_matmul.py) (Triton) · [23_batched_matmul.cu](https://github.com/Prakash-sa/GPU-ultimatum/blob/main/docs/leetgpu/23_batched_matmul.cu) (CUDA C++) |
 | **Task** | `C[b] = A[b] @ B[b]`, **float32**; A is BATCH × M × K, B is BATCH × K × N; BATCH ≤ 128, M, N, K ≤ 1024; perf 32 × 256³; tolerance **1e-5** |
 | **Bound by** | compute on the CUDA cores, and latency (each product is small) |
 

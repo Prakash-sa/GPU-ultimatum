@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Question** | *RMS Normalization* (medium) on [LeetGPU](https://leetgpu.com/challenges) · [official spec and reference](https://github.com/AlphaGPU/leetgpu-challenges/tree/main/challenges/medium/50_rms_normalization) |
-| **Solution** | [06_rms_norm.py](https://github.com/Prakash-sa/GPU-Codes/blob/main/docs/leetgpu/06_rms_norm.py) (Triton) · [06_rms_norm.cu](https://github.com/Prakash-sa/GPU-Codes/blob/main/docs/leetgpu/06_rms_norm.cu) (CUDA C++) |
+| **Solution** | [06_rms_norm.py](https://github.com/Prakash-sa/GPU-ultimatum/blob/main/docs/leetgpu/06_rms_norm.py) (Triton) · [06_rms_norm.cu](https://github.com/Prakash-sa/GPU-ultimatum/blob/main/docs/leetgpu/06_rms_norm.cu) (CUDA C++) |
 | **Task** | $y = \gamma \cdot x / \sqrt{\text{mean}(x^2) + \epsilon} + \beta$ with **scalar** γ, β; N ≤ 100K; tolerance 1e-5 |
 | **Bound by** | launch overhead (1.2 MB of traffic) |
 

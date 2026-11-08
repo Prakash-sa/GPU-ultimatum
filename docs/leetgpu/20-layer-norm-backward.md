@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Question** | *Layer Norm Backward* (medium) on [LeetGPU](https://leetgpu.com/challenges) · [official spec and reference](https://github.com/AlphaGPU/leetgpu-challenges/tree/main/challenges/medium/144_layer_norm_backward) |
-| **Solution** | [20_layer_norm_backward.py](https://github.com/Prakash-sa/GPU-Codes/blob/main/docs/leetgpu/20_layer_norm_backward.py) (Triton) · [20_layer_norm_backward.cu](https://github.com/Prakash-sa/GPU-Codes/blob/main/docs/leetgpu/20_layer_norm_backward.cu) (CUDA C++) |
+| **Solution** | [20_layer_norm_backward.py](https://github.com/Prakash-sa/GPU-ultimatum/blob/main/docs/leetgpu/20_layer_norm_backward.py) (Triton) · [20_layer_norm_backward.cu](https://github.com/Prakash-sa/GPU-ultimatum/blob/main/docs/leetgpu/20_layer_norm_backward.cu) (CUDA C++) |
 | **Task** | given x, γ, the saved mean and rstd, and dy: compute dx, dγ, dβ; perf 16384 × 4096; tolerance 1e-3 |
 | **Bound by** | memory bandwidth |
 

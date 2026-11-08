@@ -1,4 +1,4 @@
-# GPU Codes
+# GPU Ultimatum
 
 Notes on GPU programming and a hardware reference sheet for the NVIDIA GPUs I
 have run workloads on.

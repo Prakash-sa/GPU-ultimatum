@@ -1,9 +1,9 @@
-# GPU Codes
+# GPU Ultimatum
 
 Notes on GPU programming (CUDA, memory, performance, multi-GPU, profiling, Python
 GPU stacks) and a GPU hardware reference sheet.
 
-**Read online:** <https://prakash-sa.github.io/GPU-Codes/>
+**Read online:** <https://prakash-sa.github.io/GPU-ultimatum/>
 
 ## Contents
 

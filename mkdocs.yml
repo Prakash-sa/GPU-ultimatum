@@ -1,8 +1,8 @@
-site_name: GPU Codes
+site_name: GPU Ultimatum
 site_description: Notes on GPU programming and GPU hardware reference sheets
-site_url: https://prakash-sa.github.io/GPU-Codes/
-repo_url: https://github.com/Prakash-sa/GPU-Codes
-repo_name: Prakash-sa/GPU-Codes
+site_url: https://prakash-sa.github.io/GPU-ultimatum/
+repo_url: https://github.com/Prakash-sa/GPU-ultimatum
+repo_name: Prakash-sa/GPU-ultimatum
 edit_uri: edit/main/docs/
 
 theme:

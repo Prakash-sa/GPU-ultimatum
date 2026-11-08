@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Question** | *[Sparse Matrix-Vector Multiplication](https://leetgpu.com/challenges/sparse-matrix-vector-multiplication)* (medium) on LeetGPU · [official spec and reference](https://github.com/AlphaGPU/leetgpu-challenges/tree/main/challenges/medium/18_sparse_matrix_vector_multiplication) |
-| **Solution** | [22_spmv.py](https://github.com/Prakash-sa/GPU-Codes/blob/main/docs/leetgpu/22_spmv.py) (Triton) · [22_spmv.cu](https://github.com/Prakash-sa/GPU-Codes/blob/main/docs/leetgpu/22_spmv.cu) (CUDA C++) |
+| **Solution** | [22_spmv.py](https://github.com/Prakash-sa/GPU-ultimatum/blob/main/docs/leetgpu/22_spmv.py) (Triton) · [22_spmv.cu](https://github.com/Prakash-sa/GPU-ultimatum/blob/main/docs/leetgpu/22_spmv.cu) (CUDA C++) |
 | **Task** | $y = A x$, float32. A is M × N with 60–70% zeros, **stored dense** and row-major; `nnz` is given; M, N ≤ 10,000; perf M = 1,000, N = 10,000 (3.5M non-zeros); tolerance 1e-3 |
 | **Bound by** | memory bandwidth (0.5 FLOP per byte) |
 

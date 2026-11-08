@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Question** | *[Matrix Multiplication](https://leetgpu.com/challenges/matrix-multiplication)* (easy) on LeetGPU · [official spec and reference](https://github.com/AlphaGPU/leetgpu-challenges/tree/main/challenges/easy/2_matrix_multiplication) |
-| **Solution** | [21_matrix_multiplication.py](https://github.com/Prakash-sa/GPU-Codes/blob/main/docs/leetgpu/21_matrix_multiplication.py) (Triton) · [21_matrix_multiplication.cu](https://github.com/Prakash-sa/GPU-Codes/blob/main/docs/leetgpu/21_matrix_multiplication.cu) (CUDA C++) |
+| **Solution** | [21_matrix_multiplication.py](https://github.com/Prakash-sa/GPU-ultimatum/blob/main/docs/leetgpu/21_matrix_multiplication.py) (Triton) · [21_matrix_multiplication.cu](https://github.com/Prakash-sa/GPU-ultimatum/blob/main/docs/leetgpu/21_matrix_multiplication.cu) (CUDA C++) |
 | **Task** | $C = A \times B$, float32, row-major. A is **M × N**, B is **N × K** (the inner dimension is *N*); 1 ≤ M, N, K ≤ 8192; perf 8192 × 6144 × 4096; tolerance 1e-4 |
 | **Bound by** | compute (≈ 945 FLOP per byte) |
 
