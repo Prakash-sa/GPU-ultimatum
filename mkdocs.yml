@@ -207,3 +207,10 @@ nav:
           - 7. Parallel C++ on the CPU: cpp/07-parallel.md
           - 8. Special topics: cpp/08-special.md
           - 9. The same C++ inside CUDA: cpp/09-cpp-in-cuda.md
+      - CUDA crash course:
+          - Overview: cuda-course/index.md
+          - 1. Vector addition: cuda-course/01-vector-add.md
+          - 2. Matrix multiplication: cuda-course/02-matmul.md
+          - 3. Sum reduction: cuda-course/03-reduction.md
+          - 4. Histogram: cuda-course/04-histogram.md
+          - 5. Convolution: cuda-course/05-convolution.md

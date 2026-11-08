@@ -81,12 +81,13 @@ def to_cpp(src):
 
 def build(cu):
     BUILD.mkdir(exist_ok=True)
-    lib = BUILD / (cu.stem + ".so")
+    key = str(cu.relative_to(ROOT).with_suffix("")).replace("/", "__")   # unique per file
+    lib = BUILD / (key + ".so")
     if GPU:
         subprocess.run(["nvcc", "-O3", "-arch=native", "-shared", "-Xcompiler", "-fPIC",
                         "-o", str(lib), str(cu)], check=True)
         return ctypes.CDLL(str(lib))
-    cpp = BUILD / (cu.stem + ".cpp")
+    cpp = BUILD / (key + ".cpp")
     cpp.write_text(to_cpp(cu.read_text()))
     subprocess.run(["g++", "-std=c++20", "-O2", "-ffp-contract=off", "-fPIC", "-shared", "-pthread",
                     "-Wno-unknown-pragmas", f"-I{HERE}", "-o", str(lib), str(cpp)], check=True)
@@ -546,9 +547,87 @@ def cpp_in_cuda(lib):
         check(f"RAII sum n={n}", got, xh.double().sum().reshape(1), 1e-9, 1e-9)
 
 
+
+# ---------------------------------------------------------------- CUDA crash course
+# Entry points take host arrays and do their own copies, so tensors stay on the CPU.
+
+def _cpu(*shape, lo=-1.0, hi=1.0):
+    return torch.empty(*shape, device="cpu").uniform_(lo, hi)
+
+
+def course_vadd(lib):
+    for name in ["vadd_baseline", "vadd_pinned", "vadd_unified", "vadd_unified_prefetch"]:
+        f = fn(lib, name, P, P, P, I)
+        for n in [1, 255, 256, 1000, 1 << 16]:
+            a, b, c = _cpu(n), _cpu(n), torch.zeros(n, device="cpu")
+            f(ptr(a), ptr(b), ptr(c), n)
+            check(f"{name} n={n}", c, a + b, 0, 0)
+
+
+def course_matmul(lib):
+    for name in ["mm_baseline", "mm_no_alias"]:
+        f = fn(lib, name, P, P, P, I)
+        for N in [16, 32, 64]:
+            a, b, c = _cpu(N, N), _cpu(N, N), torch.zeros(N, N, device="cpu")
+            f(ptr(a), ptr(b), ptr(c), N)
+            check(f"{name} {N}x{N}", c, a @ b, 1e-5, 1e-5)
+    f = fn(lib, "mm_non_multiple", P, P, P, I)
+    for N in [1, 7, 17, 50]:
+        a, b, c = _cpu(N, N), _cpu(N, N), torch.zeros(N, N, device="cpu")
+        f(ptr(a), ptr(b), ptr(c), N)
+        check(f"mm_non_multiple {N}x{N}", c, a @ b, 1e-5, 1e-5)
+    for name in ["mm_rectangular", "mm_tiled"]:
+        f = fn(lib, name, P, P, P, I, I, I)
+        for M, K, N in [(1, 1, 1), (3, 5, 7), (17, 33, 9), (40, 16, 70), (64, 100, 48)]:
+            a, b, c = _cpu(M, K), _cpu(K, N), torch.zeros(M, N, device="cpu")
+            f(ptr(a), ptr(b), ptr(c), M, K, N)
+            check(f"{name} {M}x{K}x{N}", c, a @ b, 1e-5, 1e-5)
+
+
+def course_reduction(lib):
+    for name in ["sum_diverged", "sum_bank_conflicts", "sum_no_conflicts", "sum_reduce_idle", "sum_warp", "sum_cg"]:
+        f = getattr(lib, name)
+        f.argtypes, f.restype = [P, I], ctypes.c_int
+        for n in [1, 255, 256, 257, 1000, 70_001]:
+            x = torch.randint(-50, 50, (n,), dtype=torch.int32, device="cpu")
+            got = torch.tensor([f(ptr(x), n)])
+            check(f"{name} n={n}", got, x.long().sum().reshape(1), 0, 0)
+
+
+def course_histogram(lib):
+    for name in ["histogram_global", "histogram_shared"]:
+        f = fn(lib, name, P, I, P, I)
+        for n, nb in [(1, 1), (1000, 7), (50_000, 26), (100_000, 256)]:
+            x = torch.randint(0, nb, (n,), dtype=torch.int32, device="cpu")
+            h = torch.zeros(nb, dtype=torch.int32, device="cpu")
+            f(ptr(x), n, ptr(h), nb)
+            check(f"{name} n={n} bins={nb}", h, torch.bincount(x, minlength=nb).int(), 0, 0)
+
+
+def course_convolution(lib):
+    f = fn(lib, "conv1d_step", P, I, P, I, P, I)
+    for step, label in [(1, "naive"), (2, "constant"), (3, "tiled"), (4, "cache")]:
+        for n, m in [(1, 1), (10, 3), (257, 7), (1000, 31), (4096, 5)]:
+            x, mask, y = _cpu(n), _cpu(m), torch.zeros(n, device="cpu")
+            f(ptr(x), n, ptr(mask), m, ptr(y), step)
+            want = torch.nn.functional.conv1d(x.view(1, 1, -1), mask.view(1, 1, -1), padding=m // 2).view(-1)
+            check(f"conv1d {label} n={n} m={m}", y, want, 1e-5, 1e-5)
+    g = fn(lib, "conv2d", P, I, P, I, P)
+    for N, m in [(1, 1), (5, 3), (33, 7), (64, 5)]:
+        img, mask, out = _cpu(N, N), _cpu(m, m), torch.zeros(N, N, device="cpu")
+        g(ptr(img), N, ptr(mask), m, ptr(out))
+        want = torch.nn.functional.conv2d(img.view(1, 1, N, N), mask.view(1, 1, m, m), padding=m // 2).view(N, N)
+        check(f"conv2d N={N} m={m}", out, want, 1e-5, 1e-5)
+
+
 TESTS = {f"{n:02d}": globals()[f"t{n:02d}"] for n in range(1, 24)}
 EXTRA = {"docs/notes/stencil_ops.cu": stencil, "docs/notes/warp_primitives.cu": warp,
-         "docs/cpp/src/09_cpp_in_cuda.cu": cpp_in_cuda}
+         "docs/cpp/src/09_cpp_in_cuda.cu": cpp_in_cuda,
+         "docs/cuda-course/src/01_vector_add.cu": course_vadd,
+         "docs/cuda-course/src/02_matmul.cu": course_matmul,
+         "docs/cuda-course/src/03_reduction.cu": course_reduction,
+         "docs/cuda-course/src/04_histogram.cu": course_histogram,
+         "docs/cuda-course/src/05_convolution.cu": course_convolution}
 
 
 def main():
@@ -559,7 +638,7 @@ def main():
     pattern = args[0] if args else ""
     files = sorted((ROOT / "docs" / "leetgpu").glob("[0-9][0-9]_*.cu")) + [ROOT / k for k in EXTRA]
     for cu in files:
-        if pattern not in cu.name:
+        if pattern not in str(cu.relative_to(ROOT)):
             continue
         print(cu.relative_to(ROOT))
         test = EXTRA.get(str(cu.relative_to(ROOT))) or TESTS[cu.name[:2]]

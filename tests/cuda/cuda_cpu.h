@@ -42,6 +42,8 @@
 #define __launch_bounds__(...)
 #define __align__(n) __attribute__((aligned(n)))
 #define __shared__ static
+#define __constant__
+#define __managed__
 
 struct dim3 {
     unsigned x, y, z;
@@ -429,6 +431,25 @@ inline cudaError_t cudaDeviceGetAttribute(int* v, cudaDeviceAttr a, int) {
 }
 template <class K> inline cudaError_t cudaOccupancyMaxActiveBlocksPerMultiprocessor(int* n, K, int, size_t) {
     *n = 2;
+    return cudaSuccess;
+}
+
+// Pinned and unified memory: on the CPU every allocation is "host" memory, so these only
+// need to hand out working pointers. cudaMemcpyToSymbol copies into a __constant__ array.
+inline cudaError_t cudaMallocHost(void** p, size_t n) { return cudaMalloc(p, n); }
+template <class T> inline cudaError_t cudaMallocHost(T** p, size_t n) { return cudaMalloc((void**)p, n); }
+inline cudaError_t cudaFreeHost(void* p) { return cudaFree(p); }
+constexpr unsigned cudaMemAttachGlobal = 1;
+inline cudaError_t cudaMallocManaged(void** p, size_t n, unsigned = cudaMemAttachGlobal) { return cudaMalloc(p, n); }
+template <class T> inline cudaError_t cudaMallocManaged(T** p, size_t n, unsigned f = cudaMemAttachGlobal) {
+    return cudaMallocManaged((void**)p, n, f);
+}
+constexpr int cudaCpuDeviceId = -1;
+inline cudaError_t cudaMemPrefetchAsync(const void*, size_t, int, cudaStream_t = nullptr) { return cudaSuccess; }
+template <class T>
+inline cudaError_t cudaMemcpyToSymbol(T& symbol, const void* src, size_t count, size_t offset = 0,
+                                      cudaMemcpyKind = cudaMemcpyHostToDevice) {
+    std::memcpy(reinterpret_cast<char*>(&symbol) + offset, src, count);
     return cudaSuccess;
 }
 
