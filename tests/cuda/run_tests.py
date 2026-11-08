@@ -69,11 +69,13 @@ def to_cpp(src):
                 break
             j -= 1
         e = src.index(">>>", k)
-        grid, block = (p.strip() for p in _split_top(src[k + 3:e])[:2])
+        cfg = [c.strip() for c in _split_top(src[k + 3:e])]
+        grid, block = cfg[:2]
+        stream = cfg[3] if len(cfg) > 3 else "nullptr"     # <<<grid, block, smem, stream>>>
         p = src.index("(", e)
         q = _match(src, p, "(", ")")
         out.append(src[i:j])
-        out.append(f"cuda_cpu::launch(dim3({grid}), dim3({block}), {src[j:k].strip()}, {src[p + 1:q]})")
+        out.append(f"cuda_cpu::launch_on({stream}, dim3({grid}), dim3({block}), {src[j:k].strip()}, {src[p + 1:q]})")
         i = q + 1
     out.append(src[i:])
     return '#include "cuda_cpu.h"\n' + "".join(out)
@@ -806,6 +808,58 @@ def course_convolution(lib):
         check(f"conv2d N={N} m={m}", out, want, 1e-5, 1e-5)
 
 
+# ---------------------------------------------------------------- streams practice (S1-S4)
+
+def _heat_ref(u0, steps, alpha):
+    u = u0.clone()
+    for _ in range(steps):
+        u[1:-1] = u[1:-1] + alpha * (u[:-2] - 2 * u[1:-1] + u[2:])
+    return u
+
+
+def s1_pipeline(lib):
+    f = fn(lib, "solve", P, P, I, I)
+    for n, ns in [(1, 1), (1000, 2), (4097, 3), (100_000, 4)]:
+        x = torch.rand(n, device="cpu") * 4 - 2              # host memory, as the problem says
+        y = torch.full((n,), float("nan"), device="cpu")
+        if GPU:
+            x, y = x.pin_memory(), y.pin_memory()
+        f(ptr(x), ptr(y), n, ns)
+        check(f"pipeline n={n} streams={ns}", y, x * x + 1, 0, 0)
+
+
+def s2_fork_join(lib):
+    f = fn(lib, "solve", P, P, I)
+    # small sizes several times: a missing join only shows when one branch runs late
+    for n, rep in [(1, 12), (31, 12), (1000, 3), (65_537, 1)]:
+        for r in range(rep):
+            x = torch.rand(n) * 6 - 2
+            out = torch.full((n,), float("nan"))
+            f(ptr(x), ptr(out), n)
+            check(f"fork-join n={n} run {r}", out, (x - x.double().mean().float()) / x.abs().max(), 1e-5, 1e-5)
+    x, out = torch.zeros(100), torch.full((100,), float("nan"))
+    f(ptr(x), ptr(out), 100)
+    check("fork-join all zero", out, torch.zeros(100), 0, 0)
+
+
+def s3_halo(lib):
+    f = fn(lib, "solve", P, P, I, I, F)
+    for n, steps in [(4, 3), (5, 1), (10, 7), (257, 20), (1000, 50), (64, 0)]:
+        u0 = torch.rand(n)
+        u = torch.full((n,), float("nan"))
+        f(ptr(u0), ptr(u), n, steps, 0.25)
+        check(f"halo overlap n={n} steps={steps}", u, _heat_ref(u0, steps, 0.25), 1e-6, 1e-6)
+
+
+def s4_graph(lib):
+    f = fn(lib, "solve", P, P, I, I, F)
+    for n, steps in [(3, 2), (4, 1), (100, 9), (1000, 20), (64, 101), (50, 0)]:
+        u0 = torch.rand(n)
+        u = torch.full((n,), float("nan"))
+        f(ptr(u0), ptr(u), n, steps, 0.3)
+        check(f"graph replay n={n} steps={steps}", u, _heat_ref(u0, steps, 0.3), 1e-6, 1e-6)
+
+
 TESTS = {f"{n:02d}": globals()[f"t{n:02d}"] for n in range(1, 24)}
 EXTRA = {"docs/notes/stencil_ops.cu": stencil, "docs/notes/warp_primitives.cu": warp,
          "docs/cpp/src/09_cpp_in_cuda.cu": cpp_in_cuda,
@@ -823,7 +877,11 @@ EXTRA = {"docs/notes/stencil_ops.cu": stencil, "docs/notes/warp_primitives.cu": 
          "docs/kernels/src/07_dropout.cu": k_dropout,
          "docs/kernels/src/08_int8_quant.cu": k_int8,
          "docs/kernels/src/09_embedding_bag.cu": k_embedding_bag,
-         "docs/kernels/src/10_maxpool2d.cu": k_maxpool}
+         "docs/kernels/src/10_maxpool2d.cu": k_maxpool,
+         "docs/leetgpu/s1_stream_pipeline.cu": s1_pipeline,
+         "docs/leetgpu/s2_fork_join.cu": s2_fork_join,
+         "docs/leetgpu/s3_halo_overlap.cu": s3_halo,
+         "docs/leetgpu/s4_cuda_graph.cu": s4_graph}
 
 
 def main():

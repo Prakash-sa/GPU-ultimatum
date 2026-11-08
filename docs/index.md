@@ -16,7 +16,7 @@ have run workloads on.
 - **[C++ for GPU programmers](cpp/index.md)**: the C++ behind CUDA code, one picture and a few lines at a time (follows CoffeeBeforeArch's *C++ From Scratch*).
 - **[CUDA crash course](cuda-course/index.md)**: vector add, matmul, reduction, histogram and convolution, improved one visual step at a time (follows CoffeeBeforeArch's *CUDA Crash Course*).
 - **[Before GPU Engineering](notes/before-gpu/index.md)**: a 56-chapter, first-principles notebook on how GPU hardware works, from transistors to profiling. By Ranjan Yadav (MIT), part of the notes.
-- **[LeetGPU solutions in Triton and CUDA](leetgpu/index.md)**: 23 problems, each solved in Triton and in CUDA C++, tested, with explanations, T4 vs H100 notes, profiling steps and videos.
+- **[LeetGPU solutions in Triton and CUDA](leetgpu/index.md)**: 23 problems, each solved in Triton and in CUDA C++, tested, with explanations, T4 vs H100 notes, profiling steps and videos. Plus four stream practice problems (S1–S4): pipelined copies, fork-join with events, halo overlap, CUDA Graphs.
 
 ## Reading order
 

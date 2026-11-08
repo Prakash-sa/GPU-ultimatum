@@ -13,6 +13,14 @@
 //   * Warp votes, match and __reduce_*_sync see the lanes of the warp that have not exited;
 //     the mask argument is not checked, so call them from converged code.
 //   * Device memory is host memory; cudaMemcpy is memcpy.
+//   * Streams are real: each created stream is a worker thread that runs its queue in order,
+//     after a small random delay, so a missing cudaStreamWaitEvent or stream synchronize
+//     shows up as a wrong answer. Kernels from different streams still run one at a time
+//     (__shared__ is static), but copies, memsets and waits interleave freely.
+//   * The legacy default stream (0) runs work inline on the host after waiting for every
+//     blocking stream. Streams made with cudaStreamNonBlocking are not waited for.
+//   * Graph capture records the captured stream's work; parameters are copied at capture
+//     time, as on the GPU. Only single-stream capture is supported.
 //
 // run_tests.py rewrites `kernel<<<grid, block>>>(args)` into cuda_cpu::launch(...) and
 // compiles each .cu file as C++20 with this header in front.
@@ -21,6 +29,13 @@
 #include <algorithm>
 #include <atomic>
 #include <barrier>
+#include <chrono>
+#include <condition_variable>
+#include <deque>
+#include <functional>
+#include <mutex>
+#include <random>
+#include <set>
 #include <cfloat>
 #include <climits>
 #include <cmath>
@@ -283,6 +298,10 @@ inline void __threadfence_block() { std::atomic_thread_fence(std::memory_order_s
 inline void __threadfence() { std::atomic_thread_fence(std::memory_order_seq_cst); }
 inline void __threadfence_system() { std::atomic_thread_fence(std::memory_order_seq_cst); }
 
+inline unsigned __float_as_uint(float f) { unsigned u; std::memcpy(&u, &f, 4); return u; }
+inline int __float_as_int(float f) { int u; std::memcpy(&u, &f, 4); return u; }
+inline float __uint_as_float(unsigned u) { float f; std::memcpy(&f, &u, 4); return f; }
+inline float __int_as_float(int u) { float f; std::memcpy(&f, &u, 4); return f; }
 inline int __popc(unsigned x) { return __builtin_popcount(x); }
 inline int __ffs(unsigned x) { return __builtin_ffs(int(x)); }
 inline int __clz(unsigned x) { return x ? __builtin_clz(x) : 32; }
@@ -391,6 +410,7 @@ inline unsigned long long atomicAdd(unsigned long long* p, unsigned long long v)
     return std::atomic_ref<unsigned long long>(*p).fetch_add(v);
 }
 inline int atomicMax(int* p, int v) { return atomic_rmw(p, [v](int o) { return o > v ? o : v; }); }
+inline unsigned atomicMax(unsigned* p, unsigned v) { return atomic_rmw(p, [v](unsigned o) { return o > v ? o : v; }); }
 inline int atomicMin(int* p, int v) { return atomic_rmw(p, [v](int o) { return o < v ? o : v; }); }
 inline unsigned long long atomicMin(unsigned long long* p, unsigned long long v) {
     return atomic_rmw(p, [v](unsigned long long o) { return o < v ? o : v; });
@@ -404,24 +424,236 @@ inline int atomicExch(int* p, int v) { return std::atomic_ref<int>(*p).exchange(
 // ------------------------------------------------------------------ runtime API
 
 typedef int cudaError_t;
-typedef void* cudaStream_t;
 constexpr cudaError_t cudaSuccess = 0;
+constexpr cudaError_t cudaErrorNotReady = 600;
 enum cudaMemcpyKind { cudaMemcpyHostToHost, cudaMemcpyHostToDevice, cudaMemcpyDeviceToHost,
                       cudaMemcpyDeviceToDevice, cudaMemcpyDefault };
+
+namespace cuda_cpu {
+
+inline std::mutex kernel_mu;                 // one kernel at a time (__shared__ is static)
+
+struct Graph { std::vector<std::function<void()>> nodes; };
+
+struct Stream {
+    std::mutex m;
+    std::condition_variable cv;
+    std::deque<std::function<void()>> q;
+    bool busy = false, stop = false, blocking;
+    Graph* capture = nullptr;
+    std::thread th;
+    explicit Stream(bool b) : blocking(b), th([this] { loop(); }) {}
+    void loop() {
+        std::mt19937 rng(std::random_device{}());
+        for (;;) {
+            std::function<void()> f;
+            {
+                std::unique_lock l(m);
+                cv.wait(l, [&] { return stop || !q.empty(); });
+                if (q.empty()) return;
+                f = std::move(q.front());
+                q.pop_front();
+                busy = true;
+            }
+            // Shake the order: usually a short delay, sometimes one longer than a kernel, so
+            // a stream that is missing a wait really does run ahead of the work it needs.
+            std::this_thread::sleep_for(std::chrono::microseconds(rng() % 4 ? rng() % 300 : rng() % 50000));
+            f();
+            {
+                std::lock_guard l(m);
+                busy = false;
+            }
+            cv.notify_all();
+        }
+    }
+    void push(std::function<void()> f) {
+        if (capture) { capture->nodes.push_back(std::move(f)); return; }
+        {
+            std::lock_guard l(m);
+            q.push_back(std::move(f));
+        }
+        cv.notify_all();
+    }
+    void sync() {
+        std::unique_lock l(m);
+        cv.wait(l, [&] { return q.empty() && !busy; });
+    }
+    ~Stream() {
+        sync();
+        {
+            std::lock_guard l(m);
+            stop = true;
+        }
+        cv.notify_all();
+        th.join();
+    }
+};
+
+inline std::mutex streams_mu;
+inline std::set<Stream*> streams;
+
+inline void sync_streams(bool only_blocking) {
+    std::vector<Stream*> all;
+    {
+        std::lock_guard l(streams_mu);
+        all.assign(streams.begin(), streams.end());
+    }
+    for (Stream* s : all)
+        if (s->blocking || !only_blocking) s->sync();
+}
+
+// Run f on stream s, or inline (after the blocking streams) for the legacy default stream.
+inline void enqueue(void* s, std::function<void()> f) {
+    if (s) { static_cast<Stream*>(s)->push(std::move(f)); return; }
+    sync_streams(true);
+    f();
+}
+
+struct EventState {
+    std::mutex m;
+    std::condition_variable cv;
+    bool done = true;
+    std::chrono::steady_clock::time_point t = std::chrono::steady_clock::now();
+    void set() {
+        {
+            std::lock_guard l(m);
+            done = true;
+            t = std::chrono::steady_clock::now();
+        }
+        cv.notify_all();
+    }
+    void wait() {
+        std::unique_lock l(m);
+        cv.wait(l, [&] { return done; });
+    }
+};
+struct Event { std::shared_ptr<EventState> cur = std::make_shared<EventState>(); };
+
+template <class K, class... A>
+void launch(dim3 grid, dim3 block, K kernel, A... args);
+
+template <class K, class... A>
+void launch_on(void* s, dim3 grid, dim3 block, K kernel, A... args) {
+    enqueue(s, [=] {
+        std::lock_guard l(kernel_mu);
+        launch(grid, block, kernel, args...);
+    });
+}
+
+}  // namespace cuda_cpu
+
+typedef void* cudaStream_t;
+typedef cuda_cpu::Event* cudaEvent_t;
+typedef cuda_cpu::Graph* cudaGraph_t;
+typedef cuda_cpu::Graph* cudaGraphExec_t;
+constexpr unsigned cudaStreamDefault = 0, cudaStreamNonBlocking = 1;
+constexpr unsigned cudaEventDefault = 0, cudaEventDisableTiming = 2;
+enum cudaStreamCaptureMode { cudaStreamCaptureModeGlobal, cudaStreamCaptureModeThreadLocal,
+                             cudaStreamCaptureModeRelaxed };
+
+inline cudaError_t cudaStreamCreateWithFlags(cudaStream_t* s, unsigned flags) {
+    auto* st = new cuda_cpu::Stream(!(flags & cudaStreamNonBlocking));
+    std::lock_guard l(cuda_cpu::streams_mu);
+    cuda_cpu::streams.insert(st);
+    *s = st;
+    return cudaSuccess;
+}
+inline cudaError_t cudaStreamCreate(cudaStream_t* s) { return cudaStreamCreateWithFlags(s, cudaStreamDefault); }
+inline cudaError_t cudaStreamDestroy(cudaStream_t s) {
+    auto* st = static_cast<cuda_cpu::Stream*>(s);
+    {
+        std::lock_guard l(cuda_cpu::streams_mu);
+        cuda_cpu::streams.erase(st);
+    }
+    delete st;                                   // finishes the queued work first
+    return cudaSuccess;
+}
+inline cudaError_t cudaStreamSynchronize(cudaStream_t s) {
+    if (s) static_cast<cuda_cpu::Stream*>(s)->sync(); else cuda_cpu::sync_streams(true);
+    return cudaSuccess;
+}
+inline cudaError_t cudaDeviceSynchronize() { cuda_cpu::sync_streams(false); return cudaSuccess; }
+
+inline cudaError_t cudaEventCreate(cudaEvent_t* e) { *e = new cuda_cpu::Event; return cudaSuccess; }
+inline cudaError_t cudaEventCreateWithFlags(cudaEvent_t* e, unsigned) { return cudaEventCreate(e); }
+inline cudaError_t cudaEventDestroy(cudaEvent_t e) { delete e; return cudaSuccess; }
+inline cudaError_t cudaEventRecord(cudaEvent_t e, cudaStream_t s = nullptr) {
+    auto st = std::make_shared<cuda_cpu::EventState>();
+    st->done = false;
+    e->cur = st;
+    cuda_cpu::enqueue(s, [st] { st->set(); });
+    return cudaSuccess;
+}
+// The wait is for the record made most recently before this call, as in CUDA.
+inline cudaError_t cudaStreamWaitEvent(cudaStream_t s, cudaEvent_t e, unsigned = 0) {
+    auto st = e->cur;
+    cuda_cpu::enqueue(s, [st] { st->wait(); });
+    return cudaSuccess;
+}
+inline cudaError_t cudaEventSynchronize(cudaEvent_t e) { e->cur->wait(); return cudaSuccess; }
+inline cudaError_t cudaEventQuery(cudaEvent_t e) {
+    std::lock_guard l(e->cur->m);
+    return e->cur->done ? cudaSuccess : cudaErrorNotReady;
+}
+inline cudaError_t cudaEventElapsedTime(float* ms, cudaEvent_t a, cudaEvent_t b) {
+    *ms = std::chrono::duration<float, std::milli>(b->cur->t - a->cur->t).count();
+    return cudaSuccess;
+}
+
+inline cudaError_t cudaStreamBeginCapture(cudaStream_t s, cudaStreamCaptureMode) {
+    static_cast<cuda_cpu::Stream*>(s)->capture = new cuda_cpu::Graph;
+    return cudaSuccess;
+}
+inline cudaError_t cudaStreamEndCapture(cudaStream_t s, cudaGraph_t* g) {
+    auto* st = static_cast<cuda_cpu::Stream*>(s);
+    *g = st->capture;
+    st->capture = nullptr;
+    return cudaSuccess;
+}
+inline cudaError_t cudaGraphInstantiate(cudaGraphExec_t* x, cudaGraph_t g, unsigned long long = 0) {
+    *x = new cuda_cpu::Graph(*g);
+    return cudaSuccess;
+}
+inline cudaError_t cudaGraphLaunch(cudaGraphExec_t x, cudaStream_t s) {
+    auto nodes = x->nodes;                       // the exec may be destroyed before this runs
+    cuda_cpu::enqueue(s, [nodes] { for (auto& f : nodes) f(); });
+    return cudaSuccess;
+}
+inline cudaError_t cudaGraphDestroy(cudaGraph_t g) { delete g; return cudaSuccess; }
+inline cudaError_t cudaGraphExecDestroy(cudaGraphExec_t x) { delete x; return cudaSuccess; }
 
 inline cudaError_t cudaMalloc(void** p, size_t n) {
     *p = std::aligned_alloc(256, (n + 255) / 256 * 256 + 256);
     return cudaSuccess;
 }
 template <class T> inline cudaError_t cudaMalloc(T** p, size_t n) { return cudaMalloc((void**)p, n); }
-inline cudaError_t cudaFree(void* p) { std::free(p); return cudaSuccess; }
+inline cudaError_t cudaFree(void* p) { cudaDeviceSynchronize(); std::free(p); return cudaSuccess; }
+inline cudaError_t cudaMallocAsync(void** p, size_t n, cudaStream_t) { return cudaMalloc(p, n); }
+template <class T> inline cudaError_t cudaMallocAsync(T** p, size_t n, cudaStream_t s) {
+    return cudaMallocAsync((void**)p, n, s);
+}
+inline cudaError_t cudaFreeAsync(void* p, cudaStream_t s) {
+    cuda_cpu::enqueue(s, [p] { std::free(p); });
+    return cudaSuccess;
+}
 inline cudaError_t cudaMemcpy(void* d, const void* s, size_t n, cudaMemcpyKind) {
+    cuda_cpu::sync_streams(true);
     std::memmove(d, s, n);
     return cudaSuccess;
 }
-inline cudaError_t cudaMemset(void* p, int v, size_t n) { std::memset(p, v, n); return cudaSuccess; }
-inline cudaError_t cudaMemsetAsync(void* p, int v, size_t n, cudaStream_t = nullptr) { return cudaMemset(p, v, n); }
-inline cudaError_t cudaDeviceSynchronize() { return cudaSuccess; }
+inline cudaError_t cudaMemcpyAsync(void* d, const void* src, size_t n, cudaMemcpyKind, cudaStream_t s = nullptr) {
+    cuda_cpu::enqueue(s, [=] { std::memmove(d, src, n); });
+    return cudaSuccess;
+}
+inline cudaError_t cudaMemset(void* p, int v, size_t n) {
+    cuda_cpu::sync_streams(true);
+    std::memset(p, v, n);
+    return cudaSuccess;
+}
+inline cudaError_t cudaMemsetAsync(void* p, int v, size_t n, cudaStream_t s = nullptr) {
+    cuda_cpu::enqueue(s, [=] { std::memset(p, v, n); });
+    return cudaSuccess;
+}
 inline cudaError_t cudaGetLastError() { return cudaSuccess; }
 inline cudaError_t cudaGetDevice(int* d) { *d = 0; return cudaSuccess; }
 enum cudaDeviceAttr { cudaDevAttrMultiProcessorCount, cudaDevAttrCooperativeLaunch };

@@ -1,5 +1,12 @@
 # 4. Streams and concurrency
 
+!!! tip "Practice"
+    Four tested problems in LeetGPU's format go with this note:
+    [S1 pipelined copies](../leetgpu/s1-stream-pipeline.md),
+    [S2 fork-join with events](../leetgpu/s2-fork-join.md),
+    [S3 halo overlap](../leetgpu/s3-halo-overlap.md) and
+    [S4 CUDA Graph replay](../leetgpu/s4-cuda-graph.md).
+
 ## Streams
 
 A **stream** is an ordered queue of GPU work. Operations within one stream run in

@@ -197,6 +197,10 @@ nav:
       - 21. Matrix multiplication (FP32): leetgpu/21-matrix-multiplication.md
       - 22. Sparse matrix-vector multiply: leetgpu/22-spmv.md
       - 23. Batched matmul (FP32): leetgpu/23-batched-matmul.md
+      - S1. Pipelined copy + compute: leetgpu/s1-stream-pipeline.md
+      - S2. Fork-join with events: leetgpu/s2-fork-join.md
+      - S3. Halo exchange overlap: leetgpu/s3-halo-overlap.md
+      - S4. CUDA Graph replay: leetgpu/s4-cuda-graph.md
   - Classic kernels:
       - Overview: kernels/index.md
       - 1. Bias + GELU, SwiGLU: kernels/01-activations.md

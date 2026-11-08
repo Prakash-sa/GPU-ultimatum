@@ -54,6 +54,25 @@ saying where its own data sits.
 | [22](22-spmv.md) | Sparse Matrix-Vector Multiplication | count the bytes: dense GEMV beats CSR on dense-stored input | bandwidth | |
 | [23](23-batched-matmul.md) | Batched Matrix Multiplication (FP32) | batch on the grid, tile size vs program count, exact FP32 | compute / latency | |
 
+## Streams practice (S1–S4)
+
+LeetGPU's challenges are single kernels, so nothing there practises streams, events or
+graphs. These four problems use the same format (a `solve()` signature, tests, a
+CUDA file you can paste) but are written for this site; they are **not** on LeetGPU.
+They go with [note 4, streams and concurrency](../notes/04-streams.md). CUDA only:
+Triton has no stream control inside a kernel.
+
+| # | Problem | Pattern you learn | Figure |
+|---|---|---|---|
+| [S1](s1-stream-pipeline.md) | Pipelined copy + compute | chunks round-robin over streams, pinned memory, `cudaMemcpyAsync` | PNG |
+| [S2](s2-fork-join.md) | Fork-join with events | `cudaEventRecord` + `cudaStreamWaitEvent`, non-blocking streams | PNG |
+| [S3](s3-halo-overlap.md) | Halo exchange behind interior work | edge/interior split, two-way event dependencies per time step | PNG |
+| [S4](s4-cuda-graph.md) | CUDA Graph of a time step | capture once, replay; frozen arguments and a device-side parity flag | PNG |
+
+The CPU test harness runs each created stream on its own thread with random delays, so a
+missing wait shows up as a wrong answer; each page lists which deleted waits the tests
+catch.
+
 ## Running the solutions
 
 ```bash
@@ -168,4 +187,5 @@ yourself.
 
 ```bash
 .venv/bin/python scripts/make_leetgpu_figures.py    # writes docs/assets/img/leetgpu/
+.venv/bin/python scripts/make_stream_figures.py     # writes docs/assets/img/streams/ (S1-S4)
 ```
