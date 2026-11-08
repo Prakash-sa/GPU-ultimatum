@@ -197,6 +197,18 @@ nav:
       - 21. Matrix multiplication (FP32): leetgpu/21-matrix-multiplication.md
       - 22. Sparse matrix-vector multiply: leetgpu/22-spmv.md
       - 23. Batched matmul (FP32): leetgpu/23-batched-matmul.md
+  - Classic kernels:
+      - Overview: kernels/index.md
+      - 1. Bias + GELU, SwiGLU: kernels/01-activations.md
+      - 2. RoPE: kernels/02-rope.md
+      - 3. Fused cross-entropy: kernels/03-cross-entropy.md
+      - 4. Top-k: kernels/04-topk.md
+      - 5. Bitonic sort: kernels/05-bitonic-sort.md
+      - 6. Radix sort: kernels/06-radix-sort.md
+      - 7. Dropout (Philox): kernels/07-dropout.md
+      - 8. Int8 quantization: kernels/08-int8-quant.md
+      - 9. Embedding bag: kernels/09-embedding-bag.md
+      - 10. Max pooling: kernels/10-maxpool2d.md
   - Courses:
       - C++ for GPU programmers:
           - Overview: cpp/index.md

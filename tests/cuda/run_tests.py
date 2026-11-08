@@ -548,6 +548,192 @@ def cpp_in_cuda(lib):
 
 
 
+# ---------------------------------------------------------------- classic kernels (device pointers)
+
+def k_activations(lib):
+    bg = fn(lib, "bias_gelu", P, P, P, I, I)
+    sw = fn(lib, "swiglu", P, P, I, I)
+    for M, N in [(1, 1), (3, 5), (7, 64), (33, 1000), (4, 4096)]:
+        x, b, y = torch.randn(M, N) * 3, torch.randn(N), torch.zeros(M, N)
+        bg(ptr(x), ptr(b), ptr(y), M, N)
+        check(f"bias+GELU {M}x{N}", y, torch.nn.functional.gelu(x + b), 1e-5, 1e-5)
+    for M, H in [(1, 1), (5, 7), (16, 512)]:
+        gu, y = torch.randn(M, 2 * H) * 3, torch.zeros(M, H)
+        sw(ptr(gu), ptr(y), M, H)
+        check(f"SwiGLU {M}x{H}", y, torch.nn.functional.silu(gu[:, :H]) * gu[:, H:], 1e-5, 1e-5)
+
+
+def k_rope(lib):
+    f = fn(lib, "rope", P, I, I, I, F, I)
+    for T, H, D, pos0 in [(1, 1, 2, 0), (7, 3, 8, 0), (64, 4, 64, 0), (5, 2, 128, 1000)]:
+        x = torch.randn(T, H, D)
+        half = D // 2
+        inv = 10000.0 ** (-torch.arange(half, dtype=torch.float64) * 2 / D)
+        ang = (torch.arange(T, dtype=torch.float64) + pos0)[:, None] * inv[None, :]
+        c, s_ = ang.cos()[:, None, :], ang.sin()[:, None, :]
+        a, b = x[..., :half].double(), x[..., half:].double()
+        want = torch.cat([a * c - b * s_, b * c + a * s_], -1)
+        y = x.clone()
+        f(ptr(y), T, H, D, 10000.0, pos0)
+        check(f"RoPE T={T} H={H} D={D} pos0={pos0}", y, want, 2e-4, 1e-4)
+
+
+def k_cross_entropy(lib):
+    f = fn(lib, "cross_entropy", P, P, P, I, I)
+    for N, V in [(1, 1), (3, 10), (16, 1000), (4, 50257)]:
+        logits = torch.randn(N, V) * 4
+        tgt = torch.randint(0, V, (N,), dtype=torch.int32)
+        loss = torch.zeros(N)
+        f(ptr(logits), ptr(tgt), ptr(loss), N, V)
+        want = torch.nn.functional.cross_entropy(logits.double(), tgt.long(), reduction="none")
+        check(f"cross-entropy {N}x{V}", loss, want, 1e-4, 1e-5)
+
+
+def k_topk(lib):
+    f = fn(lib, "topk", P, P, P, I, I, I)
+    for N, V, k in [(1, 1, 1), (3, 10, 3), (8, 1000, 5), (2, 8192, 64)]:
+        x = torch.stack([torch.randperm(V).float() / V for _ in range(N)])   # distinct values
+        vals, idx = torch.zeros(N, k), torch.zeros(N, k, dtype=torch.int32)
+        f(ptr(x), ptr(vals), ptr(idx), N, V, k)
+        wv, wi = torch.topk(x, k, dim=1)
+        check(f"top-k values {N}x{V} k={k}", vals, wv, 0, 0)
+        check(f"top-k indices {N}x{V} k={k}", idx, wi.int(), 0, 0)
+
+
+def k_bitonic(lib):
+    f = fn(lib, "bitonic_sort", P, I)
+    for n in [1, 2, 7, 512, 513, 1000, 4096, 70_001]:
+        x = torch.randn(n)
+        x[: n // 10] = 0.5                                   # duplicates
+        y = x.clone()
+        f(ptr(y), n)
+        check(f"bitonic sort n={n}", y, torch.sort(x).values, 0, 0)
+
+
+def k_radix(lib):
+    f = fn(lib, "radix_sort_pairs", P, P, I)
+    for n in [1, 2, 255, 256, 1000, 65_537]:
+        keys = torch.randint(0, 2 ** 31 - 1, (n,), dtype=torch.int64)
+        keys[: n // 3] = keys[: n // 3] % 50                  # many duplicates: tests stability
+        k32 = keys.to(torch.int32)                           # bit pattern of uint32 < 2^31
+        vals = torch.arange(n, dtype=torch.int32)            # original positions
+        kk, vv = k32.clone(), vals.clone()
+        f(ptr(kk), ptr(vv), n)
+        order = torch.argsort(keys, stable=True)
+        check(f"radix sort keys n={n}", kk, k32[order], 0, 0)
+        check(f"radix sort values (stable) n={n}", vv, vals[order], 0, 0)
+
+
+def _philox_py(c, k):
+    M0, M1, W0, W1 = 0xD2511F53, 0xCD9E8D57, 0x9E3779B9, 0xBB67AE85
+    c, k = list(c), list(k)
+    for _ in range(10):
+        p0, p1 = M0 * c[0], M1 * c[2]
+        c = [((p1 >> 32) ^ c[1] ^ k[0]) & 0xFFFFFFFF, p1 & 0xFFFFFFFF,
+             ((p0 >> 32) ^ c[3] ^ k[1]) & 0xFFFFFFFF, p0 & 0xFFFFFFFF]
+        k = [(k[0] + W0) & 0xFFFFFFFF, (k[1] + W1) & 0xFFFFFFFF]
+    return c
+
+
+def k_dropout(lib):
+    raw = fn(lib, "philox_raw", P, P, P)
+    kat = [((0, 0, 0, 0), (0, 0), (0x6627e8d5, 0xe169c58d, 0xbc57ac4c, 0x9b00dbd8)),
+           ((0xffffffff,) * 4, (0xffffffff,) * 2, (0x408f276d, 0x41c83b0e, 0xa20bc7c6, 0x6d5451fd)),
+           ((0x243f6a88, 0x85a308d3, 0x13198a2e, 0x03707344), (0xa4093822, 0x299f31d0),
+            (0xd16cfe09, 0x94fdcceb, 0x5001e420, 0x24126ea1))]
+    for ctr, key, want in kat:
+        c = torch.tensor([x - 2 ** 32 if x >= 2 ** 31 else x for x in ctr], dtype=torch.int32, device="cpu")
+        kk = torch.tensor([x - 2 ** 32 if x >= 2 ** 31 else x for x in key], dtype=torch.int32, device="cpu")
+        out = torch.zeros(4, dtype=torch.int32, device="cpu")
+        if GPU:
+            c, kk, out = c.cuda(), kk.cuda(), out.cuda()
+        raw(ptr(c), ptr(kk), ptr(out))
+        w = torch.tensor([x - 2 ** 32 if x >= 2 ** 31 else x for x in want], dtype=torch.int32)
+        check(f"Philox4x32-10 known answer {ctr[0]:#x}", out.cpu(), w, 0, 0)
+    f = getattr(lib, "dropout")
+    f.argtypes, f.restype = [P, P, P, ctypes.c_longlong, F, ctypes.c_ulonglong], None
+    seed, p = 0x1234_5678_9abc, 0.3
+    for n in [1, 5, 4096, 100_003]:
+        x = torch.randn(n)
+        y, m = torch.zeros(n), torch.zeros(n, dtype=torch.uint8)
+        f(ptr(x), ptr(y), ptr(m), n, p, seed)
+        keep = m.bool()
+        check(f"dropout scale n={n}", y[keep], x[keep] / (1 - p), 1e-6, 1e-6)
+        check(f"dropout zeros n={n}", y[~keep], torch.zeros(int((~keep).sum())), 0, 0)
+        if n <= 4096:                                        # bit-exact against pure Python
+            want = []
+            for g in range((n + 3) // 4):
+                r = _philox_py((g & 0xFFFFFFFF, g >> 32, 0, 0), (seed & 0xFFFFFFFF, seed >> 32))
+                want += [(v >> 8) / 16777216.0 >= p for v in r]
+            check(f"dropout mask = Python Philox n={n}", m.cpu().bool(), torch.tensor(want[:n]), 0, 0)
+        if n > 10_000:
+            frac = keep.float().mean().item()
+            ok = abs(frac - (1 - p)) < 0.01
+            print(f"  {'ok  ' if ok else 'FAIL'} {'dropout keep fraction':40s} {frac:.4f} (want {1 - p})")
+            if not ok:
+                FAILED.append("dropout keep fraction")
+            y2, m2 = torch.zeros(n), torch.zeros(n, dtype=torch.uint8)
+            f(ptr(x), ptr(y2), ptr(m2), n, p, seed)
+            check("dropout same seed -> same mask", m2, m, 0, 0)
+            f(ptr(x), ptr(y2), ptr(m2), n, p, seed + 1)
+            differ = (m2 != m).float().mean().item()
+            ok = differ > 0.3
+            print(f"  {'ok  ' if ok else 'FAIL'} {'dropout new seed -> new mask':40s} {differ:.3f} differ")
+            if not ok:
+                FAILED.append("dropout new seed")
+
+
+def k_int8(lib):
+    qf = fn(lib, "quantize_int8", P, P, P, I, I)
+    df = fn(lib, "dequantize_int8", P, P, P, I, I)
+    for M, N in [(1, 1), (3, 7), (16, 1000), (9, 4096)]:
+        x = torch.randn(M, N) * 5
+        x[0] = 0.0                                           # an all-zero row
+        q, sc, y = torch.zeros(M, N, dtype=torch.int8), torch.zeros(M), torch.zeros(M, N)
+        qf(ptr(x), ptr(q), ptr(sc), M, N)
+        amax = x.abs().amax(1)
+        inv = torch.where(amax > 0, torch.tensor(127.0) / amax, torch.zeros(()))
+        want_q = torch.round(x * inv[:, None]).clamp(-127, 127).to(torch.int8)
+        check(f"int8 quantize {M}x{N}", q, want_q, 0, 0)
+        check(f"int8 scale {M}x{N}", sc, amax / 127, 0, 1e-7)
+        df(ptr(q), ptr(sc), ptr(y), M, N)
+        check(f"int8 dequantize {M}x{N}", y, want_q.float() * (amax / 127)[:, None], 1e-6, 1e-6)
+        err = (y - x).abs().max().item() <= (amax.max() / 127 / 2).item() * 1.0001
+        print(f"  {'ok  ' if err else 'FAIL'} {'int8 round-trip error <= scale/2':40s}")
+        if not err:
+            FAILED.append("int8 round trip")
+
+
+def k_embedding_bag(lib):
+    f = fn(lib, "embedding_bag", P, P, P, P, I, I, I)
+    for V, D, B in [(1, 1, 1), (10, 3, 4), (1000, 64, 32), (500, 300, 7)]:
+        table = torch.randn(V, D)
+        sizes = torch.randint(0, 6, (B,))
+        sizes[0] = 0                                         # an empty bag
+        offsets = torch.cat([torch.zeros(1, dtype=torch.int64), sizes.cumsum(0)])
+        nnz = int(offsets[-1])
+        indices = torch.randint(0, V, (max(nnz, 1),))[:nnz]
+        idx32 = indices.int().contiguous() if nnz else torch.zeros(1, dtype=torch.int32)   # keep alive:
+        off32 = offsets.int().contiguous()                   # ptr() takes a raw address
+        for mode, mflag in [("sum", 0), ("mean", 1)]:
+            out = torch.zeros(B, D)
+            f(ptr(table), ptr(idx32), ptr(off32), ptr(out), B, D, mflag)
+            want = torch.nn.functional.embedding_bag(indices, table, offsets, mode=mode, include_last_offset=True)
+            check(f"embedding bag {mode} V={V} D={D} B={B}", out, want, 1e-5, 1e-5)
+
+
+def k_maxpool(lib):
+    f = fn(lib, "maxpool2d", P, P, P, I, I, I, I, I, I)
+    for N, C, H, W, k, s in [(1, 1, 2, 2, 2, 2), (2, 3, 8, 8, 2, 2), (1, 4, 17, 13, 3, 2), (2, 2, 32, 32, 3, 1)]:
+        x = torch.randn(N, C, H, W)
+        OH, OW = (H - k) // s + 1, (W - k) // s + 1
+        y, idx = torch.zeros(N, C, OH, OW), torch.zeros(N, C, OH, OW, dtype=torch.int32)
+        f(ptr(x), ptr(y), ptr(idx), N, C, H, W, k, s)
+        wy, wi = torch.nn.functional.max_pool2d(x, k, s, return_indices=True)
+        check(f"maxpool {N}x{C}x{H}x{W} k={k} s={s}", y, wy, 0, 0)
+        check(f"maxpool indices {N}x{C}x{H}x{W} k={k} s={s}", idx, wi.int(), 0, 0)
+
+
 # ---------------------------------------------------------------- CUDA crash course
 # Entry points take host arrays and do their own copies, so tensors stay on the CPU.
 
@@ -627,7 +813,17 @@ EXTRA = {"docs/notes/stencil_ops.cu": stencil, "docs/notes/warp_primitives.cu": 
          "docs/cuda-course/src/02_matmul.cu": course_matmul,
          "docs/cuda-course/src/03_reduction.cu": course_reduction,
          "docs/cuda-course/src/04_histogram.cu": course_histogram,
-         "docs/cuda-course/src/05_convolution.cu": course_convolution}
+         "docs/cuda-course/src/05_convolution.cu": course_convolution,
+         "docs/kernels/src/01_activations.cu": k_activations,
+         "docs/kernels/src/02_rope.cu": k_rope,
+         "docs/kernels/src/03_cross_entropy.cu": k_cross_entropy,
+         "docs/kernels/src/04_topk.cu": k_topk,
+         "docs/kernels/src/05_bitonic_sort.cu": k_bitonic,
+         "docs/kernels/src/06_radix_sort.cu": k_radix,
+         "docs/kernels/src/07_dropout.cu": k_dropout,
+         "docs/kernels/src/08_int8_quant.cu": k_int8,
+         "docs/kernels/src/09_embedding_bag.cu": k_embedding_bag,
+         "docs/kernels/src/10_maxpool2d.cu": k_maxpool}
 
 
 def main():

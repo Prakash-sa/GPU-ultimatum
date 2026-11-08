@@ -12,6 +12,7 @@ have run workloads on.
   multi-GPU and profiling.
 - **[Cheat sheet](notes/cheatsheet.md)**: one page of APIs, limits and formulas.
 - **[Interview Q&A](interview-qa.md)**: GPU, ML-systems and multi-GPU interview questions with short answers.
+- **[Classic custom kernels](kernels/index.md)**: fused activations, RoPE, fused cross-entropy, top-k, bitonic and radix sort, Philox dropout, int8 quantization, embedding bag, max pooling: one picture and the key lines each, tested CUDA C++.
 - **[C++ for GPU programmers](cpp/index.md)**: the C++ behind CUDA code, one picture and a few lines at a time (follows CoffeeBeforeArch's *C++ From Scratch*).
 - **[CUDA crash course](cuda-course/index.md)**: vector add, matmul, reduction, histogram and convolution, improved one visual step at a time (follows CoffeeBeforeArch's *CUDA Crash Course*).
 - **[Before GPU Engineering](notes/before-gpu/index.md)**: a 56-chapter, first-principles notebook on how GPU hardware works, from transistors to profiling. By Ranjan Yadav (MIT), part of the notes.
